@@ -77,6 +77,9 @@ public class MapViewManager extends ViewGroupManager<MapView> implements RNMapsM
 
     @Override
     public View getChildAt(MapView view, int index) {
+        if (index < 0 || index >= view.getFeatureCount()) {
+            return null;
+        }
         return view.getFeatureAt(index);
     }
 
