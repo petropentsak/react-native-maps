@@ -335,157 +335,75 @@ public void removeViewAt(MapView parent, int index) {
         view.applyBaseMapPadding(left, top, right, bottom);
     }
 
-    private static final long MARKER_VISIBILITY_DELAY_MS = 100; // Delay for visibility changes
-
     @Override
-    public void addView(MapView parent, View child, int index) {
-        if (parent == null || child == null) {
-            Log.w(REACT_CLASS, "addView called with null parent or child (index=" + index + ")");
+public void addView(MapView parent, View child, int index) {
+    if (parent == null || child == null) {
+        Log.w(REACT_CLASS, "addView called with null parent or child (index=" + index + ")");
+        return;
+    }
+
+    // Defensive: remove child from any existing parent first (prevents "child already has a parent" errors)
+    android.view.ViewParent existingParent = child.getParent();
+    if (existingParent instanceof android.view.ViewGroup) {
+        try {
+            ((android.view.ViewGroup) existingParent).removeView(child);
+            Log.d(REACT_CLASS, "Detached child from previous parent before adding.");
+        } catch (Exception e) {
+            Log.w(REACT_CLASS, "Failed to remove child from its existing parent: " + e.getMessage());
+        }
+    }
+
+    int featureCount = parent.getFeatureCount();
+    int safeIndex = index;
+    if (safeIndex < 0) {
+        Log.w(REACT_CLASS, "addView: requested negative index " + index + ", clamping to 0");
+        safeIndex = 0;
+    }
+    if (safeIndex > featureCount) {
+        // allow appending to the end if RN asks for an index larger than current native count
+        Log.w(REACT_CLASS, "addView: requested index " + index + " > featureCount " + featureCount + ", clamping to " + featureCount);
+        safeIndex = featureCount;
+    }
+
+    // Try to add at safeIndex, fall back to append if something goes wrong
+    try {
+        parent.addFeature(child, safeIndex);
+    } catch (IndexOutOfBoundsException | IllegalStateException e) {
+        Log.e(REACT_CLASS, "addFeature failed at index " + safeIndex + " (featureCount=" + featureCount + "): " + e.getMessage(), e);
+        try {
+            parent.addFeature(child, parent.getFeatureCount()); // append
+            Log.d(REACT_CLASS, "addFeature fallback: appended child to end.");
+        } catch (Exception ex) {
+            Log.e(REACT_CLASS, "addFeature fallback failed: " + ex.getMessage(), ex);
+            // last resort: don't crash the app, just return
             return;
         }
-
-        // For markers, ensure proper initialization
-        if (child instanceof MapMarker) {
-            setupMarkerView((MapMarker) child);
-        }
-
-        // Defensive: remove child from any existing parent first
-        safelyDetachFromParent(child);
-
-        int featureCount = parent.getFeatureCount();
-        int safeIndex = Math.max(0, Math.min(index, featureCount));
-
-        // Try to add at safeIndex, fall back to append if something goes wrong
-        try {
-            parent.addFeature(child, safeIndex);
-        } catch (Exception e) {
-            Log.e(REACT_CLASS, "addFeature failed at index " + safeIndex + ": " + e.getMessage(), e);
-            try {
-                parent.addFeature(child, parent.getFeatureCount()); // append as fallback
-            } catch (Exception ex) {
-                Log.e(REACT_CLASS, "addFeature fallback failed: " + ex.getMessage(), ex);
-                return;
-            }
-        }
-
-        // Enhanced marker handling with delayed visibility
-        if (child instanceof MapMarker) {
-            final MapMarker markerView = (MapMarker) child;
-            scheduleMarkerVisibilityUpdate(markerView);
-        }
+    } catch (Exception e) {
+        Log.e(REACT_CLASS, "Unexpected exception in addFeature: " + e.getMessage(), e);
+        return;
     }
 
-    private void setupMarkerView(MapMarker markerView) {
-        // Ensure marker starts invisible
-        markerView.setVisibility(View.INVISIBLE);
-        
-        // Get and configure the native Google marker
-        com.google.android.gms.maps.model.Marker googleMarker = 
-            (com.google.android.gms.maps.model.Marker) markerView.getFeature();
-        if (googleMarker != null) {
-            googleMarker.setVisible(false);
-            
-            // Set icon to transparent while custom view loads
-            googleMarker.setIcon(com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(
-                android.graphics.Bitmap.createBitmap(1, 1, android.graphics.Bitmap.Config.ARGB_8888)));
-        }
-
-        // Set a tag to track view readiness
-        markerView.setTag(R.id.marker_ready, Boolean.FALSE);
-    }
-
-    private void safelyDetachFromParent(View child) {
-        android.view.ViewParent existingParent = child.getParent();
-        if (existingParent instanceof android.view.ViewGroup) {
-            try {
-                ((android.view.ViewGroup) existingParent).removeView(child);
-                Log.d(REACT_CLASS, "Detached child from previous parent before adding.");
-            } catch (Exception e) {
-                Log.w(REACT_CLASS, "Failed to remove child from its existing parent: " + e.getMessage());
-            }
-        }
-    }
-
-    private void scheduleMarkerVisibilityUpdate(final MapMarker markerView) {
-        // Remove any pending visibility updates
-        markerView.removeCallbacks(null);
-
-        // Schedule new visibility update with delay
-        markerView.postDelayed(() -> {
-            if (!markerView.isAttachedToWindow()) {
-                Log.d(REACT_CLASS, "Marker no longer attached, skipping visibility update");
-                return;
-            }
-
-            try {
-                if (markerView.isLoadingImage()) {
-                    markerView.setImageLoadedListener((uri, drawable, b) -> {
-                        updateMarkerVisibilityWithCheck(markerView);
-                    });
-                } else {
-                    // For custom view markers
-                    markerView.getViewTreeObserver().addOnPreDrawListener(
-                        new android.view.ViewTreeObserver.OnPreDrawListener() {
-                            @Override
-                            public boolean onPreDraw() {
-                                markerView.getViewTreeObserver().removeOnPreDrawListener(this);
-                                updateMarkerVisibilityWithCheck(markerView);
-                                return true;
-                            }
-                        });
-                }
-            } catch (Exception e) {
-                Log.w(REACT_CLASS, "Error scheduling marker visibility update: " + e.getMessage());
-            }
-        }, MARKER_VISIBILITY_DELAY_MS);
-    }
-
-    private void updateMarkerVisibilityWithCheck(MapMarker markerView) {
-        if (!markerView.isAttachedToWindow()) {
-            return; // Don't update detached markers
-        }
-
-        try {
+    // Preserve your existing MapMarker image-load visibility handling
+    if (child instanceof MapMarker && ((MapMarker) child).isLoadingImage()) {
+        MapMarker markerView = (MapMarker) child;
+        markerView.setImageLoadedListener((uri, drawable, b) -> {
             com.google.android.gms.maps.model.Marker googleMarker =
                 (com.google.android.gms.maps.model.Marker) markerView.getFeature();
-            if (googleMarker != null && markerView.getChildCount() > 0) {
-                // Only show if we have child views (custom content)
-                markerView.setVisibility(View.VISIBLE);
-                googleMarker.setVisible(true);
-                markerView.update(true);
-                markerView.setTag(R.id.marker_ready, Boolean.TRUE);
-            }
-        } catch (Exception ex) {
-            Log.w(REACT_CLASS, "Failed to update marker visibility: " + ex.getMessage());
-        }
-    }
-
-    @Override
-    public void removeViewAt(MapView parent, int index) {
-        if (parent == null) {
-            return;
-        }
-
-        View child = getChildAt(parent, index);
-        if (child instanceof MapMarker) {
-            MapMarker markerView = (MapMarker) child;
-            // Immediately hide the marker before removal
-            try {
-                com.google.android.gms.maps.model.Marker googleMarker =
-                    (com.google.android.gms.maps.model.Marker) markerView.getFeature();
-                if (googleMarker != null) {
-                    googleMarker.setVisible(false);
+            if (googleMarker != null) {
+                if (View.VISIBLE == markerView.getVisibility()) {
+                    try {
+                        googleMarker.setVisible(true);
+                    } catch (Exception ex) {
+                        Log.w(REACT_CLASS, "Failed to set googleMarker visible: " + ex.getMessage());
+                    }
                 }
-            } catch (Exception e) {
-                Log.w(REACT_CLASS, "Error hiding marker during removal: " + e.getMessage());
             }
-        }
-
-        try {
-            parent.removeFeatureAt(index);
-        } catch (Exception e) {
-            Log.e(REACT_CLASS, "Error removing feature: " + e.getMessage());
-        }
+            try {
+                markerView.update(true);
+            } catch (Exception ex) {
+                Log.w(REACT_CLASS, "Failed to update markerView after image load: " + ex.getMessage());
+            }
+        });
     }
 }
 
