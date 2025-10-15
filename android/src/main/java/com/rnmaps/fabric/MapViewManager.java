@@ -385,9 +385,8 @@ public void addView(MapView parent, View child, int index) {
         com.google.android.gms.maps.model.Marker googleMarker =
             (com.google.android.gms.maps.model.Marker) markerView.getFeature();
 
-        // Check if the marker has children (view-based) OR is explicitly loading an image.
-        // In both cases, the final icon is not ready yet.
-        boolean needsAsyncUpdate = markerView.hasChildren() || markerView.isLoadingImage();
+        // FIX: Use getChildCount() > 0 to check for view-based markers
+        boolean needsAsyncUpdate = markerView.getChildCount() > 0 || markerView.isLoadingImage();
 
         if (googleMarker != null && needsAsyncUpdate) {
             try {
@@ -422,7 +421,6 @@ public void addView(MapView parent, View child, int index) {
             });
         }
     }
-    // >>> END FIX <<<
 }
 
     @Override
